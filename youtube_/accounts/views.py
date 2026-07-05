@@ -17,6 +17,6 @@ class RegisterView(CreateView):
     return super().dispatch(request, *args, **kwargs)
   
   def form_valid(self, form):
-    rsponse = super().form_valid(form)
-    login(self.request, self.get_object)
+    response = super().form_valid(form)
+    login(self.request, self.object)
     return redirect("/")

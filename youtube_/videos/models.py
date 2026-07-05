@@ -1,7 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import User
 from .imagekit_client import (
-  get_optimized_video_url, get_streaming_url, get_thumbnail_url
+  get_optimized_video_url, get_streaming_url, get_thumbnail_url, add_image_watermark
 )
 
 # Create your models here.
@@ -31,7 +31,7 @@ class Video(models.Model):
   @property
   def display_thumbnail_url(self):
     if self.thumbnail_url and "/thumbnails" in self.thumbnail_url:
-      return self.thumbnail_url
+      return add_image_watermark(self.thumbnail_url, self.user.username)
     return self.generated_thumbnail_url
   
 
@@ -39,7 +39,7 @@ class Video(models.Model):
   def generated_thumbnail_url(self):
     if not self.video_url:
       return ''
-    return get_thumbnail_url(self.video_url)
+    return get_thumbnail_url(self.video_url, self.user.username)
   
   @property
   def streaming_url(self):

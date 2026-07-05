@@ -4,6 +4,9 @@ from django.shortcuts import render, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
 from django.views.decorators.http import require_POST
+from django.db import transaction
+from django.db.models import F
+
 
 from .models import Video, VideoLike
 from .forms import VideoUploadForm
@@ -15,18 +18,24 @@ logger = logging.getLogger(__name__)
 def video_detail(request, video_id):
   video = get_object_or_404(Video.objects, id=video_id)
 
-  video.views += 1
-  video.save(update_fields=["views"])
+  Video.objects.filter(id=video_id).update(views=F("views") + 1)
+  video.refresh_from_db(fields=["views"])
+ 
+
+  user_vote = None
+  if request.user.is_authenticated:
+    like = VideoLike.objects.filter(user=request.user, video=video).first()
+    if like:
+      user_vote = like.value
 
   return render(request, 'videos/detail.html', {"video": video})
 
-
 def video_list(request):
-  videos = Video.objects.all()
+  videos = Video.objects.select_related("user").all()
 
   return render(request, 'videos/list.html', {"videos": videos})
 
-
+# Todo: add pagination 
 def channel_video(request, username):
   videos = Video.objects.filter(user__username=username)
   return render(request, 'videos/channel.html', {"videos": videos, "channel_name": username})
@@ -107,43 +116,44 @@ def delete_video(request, video_id):
 @login_required
 @require_POST
 def video_vote(request, video_id):
-  video = get_object_or_404(Video, id=video_id)
   vote_type = request.POST.get("vote")
 
   if vote_type not in ["like", "dislike"]:
-    return JsonResponse(data: {"success": False, "error": "Invalid vote"}, status=400)
+    return JsonResponse({"success": False, "error": "Invalid vote"}, status=400)
   
-  value = VideoLike.LIKE if vote_type == "like" else Video.DISLIKE
+  value = VideoLike.LIKE if vote_type == "like" else VideoLike.DISLIKE
 
-  existing_vote = VideoLike.objects.filter(user=request.user, video=video).first()
+  with transaction.atomic():
+    video = Video.objects.select_for_update().get(id=video_id)
+    existing_vote = VideoLike.objects.filter(user=request.user, video=video).first()
 
-  if existing_vote:
-    if existing_vote.value == value:
-      if value == VideoLike.LIKE:
-        video.likes -= 1
+    if existing_vote:
+      if existing_vote.value == value:
+        if value == VideoLike.LIKE:
+          video.likes -= 1
+        else:
+          video.dislikes -= 1
+        existing_vote.delete()
+        user_vote = None
       else:
-        video.dislikes -= 1
-      existing_vote.delete()
-      user_vote = None
+        if value == VideoLike.LIKE:
+          video.likes += 1
+          video.dislikes -= 1
+        else:
+          video.likes -= 1
+          video.dislikes += 1
+        existing_vote.value = value
+        existing_vote.save()
+        user_vote = value
     else:
+      VideoLike.objects.create(user=request.user, video=video, value=value)
       if value == VideoLike.LIKE:
         video.likes += 1
-        video.dislikes -= 1
       else:
-        video.likes -= 1
         video.dislikes += 1
-      existing_vote.value = value
-      existing_vote.save()
       user_vote = value
-  else:
-    VideoLike.objects.create(user=request.user, video=video, value=value)
-    if value == VideoLike.LIKE:
-      video.likes += 1
-    else:
-      video.dislikes += 1
-    user_vote = value
-  
-  video.save(update_fields=["likes", "dislikes"])
+    
+    video.save(update_fields=["likes", "dislikes"])
 
   return JsonResponse({
     "likes": video.likes,
